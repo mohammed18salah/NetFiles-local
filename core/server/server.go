@@ -15,9 +15,10 @@ import (
 
 // Server handles incoming file transfers
 type Server struct {
-	cfg  *config.Config
-	mux  *http.ServeMux
-	addr string
+	cfg        *config.Config
+	mux        *http.ServeMux
+	addr       string
+	httpServer *http.Server
 }
 
 // New creates a new server instance
@@ -37,7 +38,19 @@ func New(cfg *config.Config) *Server {
 
 // ListenAndServe starts the HTTP server
 func (s *Server) ListenAndServe() error {
-	return http.ListenAndServe(s.addr, s.mux)
+	s.httpServer = &http.Server{
+		Addr:    s.addr,
+		Handler: s.mux,
+	}
+	return s.httpServer.ListenAndServe()
+}
+
+// Close stops the HTTP server
+func (s *Server) Close() error {
+	if s.httpServer != nil {
+		return s.httpServer.Close()
+	}
+	return nil
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {

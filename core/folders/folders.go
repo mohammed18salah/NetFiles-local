@@ -5,6 +5,7 @@ package folders
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 )
 
@@ -39,7 +40,15 @@ func CreateLayout(rootFolder string, myName string) error {
 		return fmt.Errorf("cannot create %s: %w", onlinePath, err)
 	}
 
+	_ = SetPermissions(rootFolder)
+
 	return nil
+}
+
+// SetPermissions grants Modify access to Users and Everyone so any logged-in user can drop files
+func SetPermissions(rootFolder string) error {
+	cmd := exec.Command("icacls", rootFolder, "/grant", "Users:(OI)(CI)M", "/grant", "Everyone:(OI)(CI)M", "/T", "/C", "/Q")
+	return cmd.Run()
 }
 
 // EnsurePeerFolder creates a folder for a peer if it doesn't exist

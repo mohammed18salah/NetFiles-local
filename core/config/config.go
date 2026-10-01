@@ -16,14 +16,9 @@ const (
 	AppName           = "NetFilesTool"
 	DefaultHTTPPort   = 47831
 	DefaultUDPPort    = 47832
+	DefaultRootFolder = `C:\NetFiles`
 	DefaultNamePrefix = "PC-"
 )
-
-// GetDefaultRootFolder returns the NetFiles folder located directly on the user's Desktop
-func GetDefaultRootFolder() string {
-	desktop := GetDesktopDir()
-	return filepath.Join(desktop, "NetFiles")
-}
 
 var ConfigDir string
 
@@ -52,7 +47,7 @@ func Default() *Config {
 		NamePrefix: DefaultNamePrefix,
 		HTTPPort:   DefaultHTTPPort,
 		UDPPort:    DefaultUDPPort,
-		RootFolder: GetDefaultRootFolder(),
+		RootFolder: DefaultRootFolder,
 		Aliases:    make(map[string]string),
 	}
 }
@@ -89,10 +84,8 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("config parse error: %w", err)
 	}
 
-	// Auto-migrate if root folder was left empty or set to the old legacy C:\NetFiles
-	if cfg.RootFolder == "" || cfg.RootFolder == `C:\NetFiles` || cfg.RootFolder == `C:/NetFiles` {
-		cfg.RootFolder = GetDefaultRootFolder()
-		_ = Save(cfg)
+	if cfg.RootFolder == "" {
+		cfg.RootFolder = DefaultRootFolder
 	}
 
 	return cfg, nil
