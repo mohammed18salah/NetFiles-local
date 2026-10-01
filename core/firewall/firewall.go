@@ -30,14 +30,14 @@ func EnsureRules(httpPort, udpPort int) error {
 		// Try self-elevation
 		elevErr := elevateAndAddRules(httpPort, udpPort)
 		if elevErr != nil {
-			return fmt.Errorf("فشل إضافة قواعد جدار الحماية: %w", err)
+			return fmt.Errorf("failed to add firewall rules: %w", err)
 		}
 		return nil
 	}
 
 	err = addUDPRule(udpPort)
 	if err != nil {
-		return fmt.Errorf("فشل إضافة قاعدة UDP: %w", err)
+		return fmt.Errorf("failed to add UDP rule: %w", err)
 	}
 
 	return nil
@@ -129,7 +129,7 @@ func CheckNetworkProfile() (isPrivate bool, profileName string, err error) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return false, "", fmt.Errorf("فشل التحقق من ملف الشبكة: %w", err)
+		return false, "", fmt.Errorf("failed to check network profile: %w", err)
 	}
 
 	profile := strings.TrimSpace(string(output))

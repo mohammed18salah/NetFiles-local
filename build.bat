@@ -1,5 +1,5 @@
 @echo off
-REM NetFiles Build Script — Created by Mohammed Salah
+REM NetFiles Build Script - Created by Mohammed Salah
 REM Produces a static netfiles.exe with no runtime dependencies
 
 echo.

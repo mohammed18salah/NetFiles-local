@@ -28,7 +28,7 @@ func CreateLayout(rootFolder string, myName string) error {
 	for _, dir := range dirs {
 		err := os.MkdirAll(dir, 0755)
 		if err != nil {
-			return fmt.Errorf("لم يتم إنشاء المجلد %s: %w", dir, err)
+			return fmt.Errorf("cannot create folder %s: %w", dir, err)
 		}
 	}
 
@@ -36,7 +36,7 @@ func CreateLayout(rootFolder string, myName string) error {
 	onlinePath := filepath.Join(rootFolder, OnlineFile)
 	err := os.WriteFile(onlinePath, []byte("0 peers online\n"), 0644)
 	if err != nil {
-		return fmt.Errorf("لم يتم إنشاء %s: %w", onlinePath, err)
+		return fmt.Errorf("cannot create %s: %w", onlinePath, err)
 	}
 
 	return nil
@@ -76,7 +76,7 @@ func RenamePeerFolder(rootFolder string, oldName string, newName string) error {
 
 	// Check if new name already exists
 	if _, err := os.Stat(newDir); err == nil {
-		return fmt.Errorf("المجلد %s موجود بالفعل", newName)
+		return fmt.Errorf("folder %s already exists", newName)
 	}
 
 	return os.Rename(oldDir, newDir)

@@ -16,9 +16,14 @@ const (
 	AppName           = "NetFilesTool"
 	DefaultHTTPPort   = 47831
 	DefaultUDPPort    = 47832
-	DefaultRootFolder = `C:\NetFiles`
 	DefaultNamePrefix = "PC-"
 )
+
+// GetDefaultRootFolder returns the NetFiles folder located directly on the user's Desktop
+func GetDefaultRootFolder() string {
+	desktop := GetDesktopDir()
+	return filepath.Join(desktop, "NetFiles")
+}
 
 var ConfigDir string
 
@@ -47,7 +52,7 @@ func Default() *Config {
 		NamePrefix: DefaultNamePrefix,
 		HTTPPort:   DefaultHTTPPort,
 		UDPPort:    DefaultUDPPort,
-		RootFolder: DefaultRootFolder,
+		RootFolder: GetDefaultRootFolder(),
 		Aliases:    make(map[string]string),
 	}
 }
@@ -75,13 +80,19 @@ func configPath() string {
 func Load() (*Config, error) {
 	data, err := os.ReadFile(configPath())
 	if err != nil {
-		return nil, fmt.Errorf("لم يتم العثور على ملف الإعدادات: %w", err)
+		return nil, fmt.Errorf("config file not found: %w", err)
 	}
 
 	cfg := Default()
 	err = json.Unmarshal(data, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("خطأ في قراءة الإعدادات: %w", err)
+		return nil, fmt.Errorf("config parse error: %w", err)
+	}
+
+	// Auto-migrate if root folder was left empty or set to the old legacy C:\NetFiles
+	if cfg.RootFolder == "" || cfg.RootFolder == `C:\NetFiles` || cfg.RootFolder == `C:/NetFiles` {
+		cfg.RootFolder = GetDefaultRootFolder()
+		_ = Save(cfg)
 	}
 
 	return cfg, nil
@@ -90,12 +101,12 @@ func Load() (*Config, error) {
 func Save(cfg *Config) error {
 	err := os.MkdirAll(ConfigDir, 0755)
 	if err != nil {
-		return fmt.Errorf("لم يتم إنشاء مجلد الإعدادات: %w", err)
+		return fmt.Errorf("cannot create config directory: %w", err)
 	}
 
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
-		return fmt.Errorf("خطأ في تحويل الإعدادات: %w", err)
+		return fmt.Errorf("config marshal error: %w", err)
 	}
 
 	return os.WriteFile(configPath(), data, 0644)

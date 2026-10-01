@@ -16,7 +16,7 @@ func SetAutostart(enable bool) error {
 	keyPath := `SOFTWARE\Microsoft\Windows\CurrentVersion\Run`
 	key, err := registry.OpenKey(registry.CURRENT_USER, keyPath, registry.SET_VALUE|registry.QUERY_VALUE)
 	if err != nil {
-		return fmt.Errorf("لم يتم فتح سجل البدء التلقائي: %w", err)
+		return fmt.Errorf("failed to open autostart registry: %w", err)
 	}
 	defer key.Close()
 
@@ -25,7 +25,7 @@ func SetAutostart(enable bool) error {
 	if enable {
 		exe, err := os.Executable()
 		if err != nil {
-			return fmt.Errorf("لم يتم العثور على مسار البرنامج: %w", err)
+			return fmt.Errorf("cannot find executable path: %w", err)
 		}
 		return key.SetStringValue(valueName, fmt.Sprintf(`"%s" start -y`, exe))
 	}

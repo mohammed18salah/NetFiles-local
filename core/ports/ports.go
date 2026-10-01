@@ -36,7 +36,7 @@ func FindFreePort(preferred int) (int, error) {
 		}
 	}
 
-	return 0, fmt.Errorf("لم يتم العثور على منفذ حر بدءاً من %d", preferred)
+	return 0, fmt.Errorf("no free port found starting from %d", preferred)
 }
 
 // isPortAvailable checks if a port is free for both TCP and UDP

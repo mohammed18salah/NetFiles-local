@@ -76,12 +76,12 @@ func ParseNameInput(input string, prefix string) string {
 	return SanitizeName(input)
 }
 
-// PromptName shows an Arabic prompt and reads the name interactively
+// PromptName shows a prompt and reads the name interactively
 func PromptName(prefix string) (string, error) {
 	reader := bufio.NewReader(os.Stdin)
 
 	for {
-		fmt.Print("أدخل رقم الجهاز أو اسمه: ")
+		fmt.Print("Enter device number or name: ")
 		input, err := reader.ReadString('\n')
 		if err != nil {
 			return "", err
@@ -89,17 +89,17 @@ func PromptName(prefix string) (string, error) {
 
 		input = strings.TrimSpace(input)
 		if input == "" {
-			fmt.Println("الاسم لا يمكن أن يكون فارغاً")
+			fmt.Println("Name cannot be empty")
 			continue
 		}
 
 		name := ParseNameInput(input, prefix)
 		if name == "" {
-			fmt.Println("اسم غير صالح")
+			fmt.Println("Invalid name")
 			continue
 		}
 
-		fmt.Printf("الاسم: %s\n", name)
+		fmt.Printf("Name set: %s\n", name)
 		return name, nil
 	}
 }

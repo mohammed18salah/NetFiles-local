@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"netfiles/core/config"
 	"netfiles/core/firewall"
@@ -23,6 +24,8 @@ const (
 )
 
 func main() {
+	initConsole()
+
 	args := os.Args[1:]
 	cmd := ""
 	if len(args) > 0 {
@@ -45,12 +48,8 @@ func main() {
 	case "about", "--version":
 		cmdAbout()
 	case "":
-		// No args: if running in a terminal, open TUI; otherwise start background service
-		if isTerminal() {
-			cmdStart(nil)
-		} else {
-			cmdStart(nil)
-		}
+		// No args: start service
+		cmdStart(nil)
 	default:
 		fmt.Printf("Unknown command: %s\n", cmd)
 		printUsage()
@@ -66,8 +65,28 @@ func isTerminal() bool {
 	return fi.Mode()&os.ModeCharDevice != 0
 }
 
+func printSplash() {
+	fmt.Println()
+	fmt.Println("        \033[1;35m/\\            /\\\033[0m")
+	fmt.Println("       \033[1;35m/  \\__      __/  \\\033[0m")
+	fmt.Println("      \033[1;35m/ /\\   \\____/   /\\ \\\033[0m")
+	fmt.Println("     \033[1;35m/ /  \\  \033[1;33m(O)\033[1;35m  \033[1;33m(O)\033[1;35m  /  \\ \\\033[0m")
+	fmt.Println("     \033[1;35m\\/    \\____\\/____/    \\/\033[0m")
+	fmt.Println("            \033[1;35m\\  \\/\\/  /\033[0m")
+	fmt.Println("             \033[1;35m\\______/\033[0m")
+	fmt.Println()
+	fmt.Printf("       \033[1;36mNetFiles\033[0m \033[90mv%s\033[0m\n", Version)
+	fmt.Printf("       \033[90m%s\033[0m\n", Credit)
+	fmt.Println()
+}
+
 func cmdStart(args []string) {
 	flags := parseStartFlags(args)
+
+	// Always show bat splash on startup unless explicitly disabled with --plain
+	if !flags.plain {
+		printSplash()
+	}
 
 	// Load or create config
 	cfg, err := config.Load()
@@ -86,27 +105,6 @@ func cmdStart(args []string) {
 		cfg.SetPassword(flags.password)
 	}
 
-	// Port check & auto-pick
-	httpPort, err := ports.FindFreePort(cfg.HTTPPort)
-	if err != nil {
-		fmt.Printf("[FAIL] لا يمكن العثور على منفذ HTTP حر: %v\n", err)
-		os.Exit(1)
-	}
-	if httpPort != cfg.HTTPPort {
-		fmt.Printf("[INFO] المنفذ %d مشغول، يستخدم المنفذ %d بدلاً\n", cfg.HTTPPort, httpPort)
-	}
-	cfg.HTTPPort = httpPort
-
-	udpPort, err := ports.FindFreePort(cfg.UDPPort)
-	if err != nil {
-		fmt.Printf("[FAIL] لا يمكن العثور على منفذ UDP حر: %v\n", err)
-		os.Exit(1)
-	}
-	if udpPort != cfg.UDPPort {
-		fmt.Printf("[INFO] المنفذ %d مشغول، يستخدم المنفذ %d بدلاً\n", cfg.UDPPort, udpPort)
-	}
-	cfg.UDPPort = udpPort
-
 	// Identity: name prompt or CLI flag
 	if flags.name != "" {
 		cfg.DisplayName = identity.SanitizeName(flags.name)
@@ -118,6 +116,10 @@ func cmdStart(args []string) {
 		cfg.DeviceID = identity.GenerateDeviceID()
 	}
 
+	if cfg.FirstSeen == "" {
+		cfg.FirstSeen = time.Now().Format(time.RFC3339)
+	}
+
 	if cfg.DisplayName == "" {
 		// Check name.txt next to exe
 		exeName := identity.ReadNameFile()
@@ -127,7 +129,7 @@ func cmdStart(args []string) {
 			// Interactive prompt
 			name, err := identity.PromptName(cfg.NamePrefix)
 			if err != nil {
-				fmt.Printf("[FAIL] خطأ في إدخال الاسم: %v\n", err)
+				fmt.Printf("[FAIL] Name input error: %v\n", err)
 				os.Exit(1)
 			}
 			cfg.DisplayName = name
@@ -137,71 +139,108 @@ func cmdStart(args []string) {
 		}
 	}
 
+	// Port check & auto-pick
+	httpPort, err := ports.FindFreePort(cfg.HTTPPort)
+	if err != nil {
+		fmt.Printf("[FAIL] Cannot find free HTTP port: %v\n", err)
+		os.Exit(1)
+	}
+	if httpPort != cfg.HTTPPort {
+		fmt.Printf("[INFO] Port %d busy, using %d instead\n", cfg.HTTPPort, httpPort)
+	}
+	cfg.HTTPPort = httpPort
+
+	udpPort, err := ports.FindFreePort(cfg.UDPPort)
+	if err != nil {
+		fmt.Printf("[FAIL] Cannot find free UDP port: %v\n", err)
+		os.Exit(1)
+	}
+	if udpPort != cfg.UDPPort {
+		fmt.Printf("[INFO] Port %d busy, using %d instead\n", cfg.UDPPort, udpPort)
+	}
+	cfg.UDPPort = udpPort
+
 	// Create folder layout
 	err = folders.CreateLayout(cfg.RootFolder, cfg.DisplayName)
 	if err != nil {
-		fmt.Printf("[FAIL] لا يمكن إنشاء المجلدات: %v\n", err)
+		fmt.Printf("[FAIL] Cannot create folders: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Add firewall rules (may need elevation)
-	err = firewall.EnsureRules(cfg.HTTPPort, cfg.UDPPort)
+	// Save config BEFORE firewall (firewall may UAC-prompt and block)
+	err = config.Save(cfg)
 	if err != nil {
-		fmt.Printf("[WARN] لم يتم إضافة قواعد جدار الحماية: %v\n", err)
-		fmt.Println("       قد تحتاج لتشغيل البرنامج كمسؤول")
+		fmt.Printf("[WARN] Failed to save config: %v\n", err)
 	}
 
 	// Register autostart if requested
 	if flags.autostart {
 		err = config.SetAutostart(true)
 		if err != nil {
-			fmt.Printf("[WARN] لم يتم تسجيل البدء التلقائي: %v\n", err)
+			fmt.Printf("[WARN] Failed to register autostart: %v\n", err)
 		}
 	}
 
-	// Save config
-	err = config.Save(cfg)
-	if err != nil {
-		fmt.Printf("[WARN] لم يتم حفظ الإعدادات: %v\n", err)
+	// Add firewall rules (may need elevation — non-fatal)
+	go func() {
+		err := firewall.EnsureRules(cfg.HTTPPort, cfg.UDPPort)
+		if err != nil {
+			fmt.Printf("[WARN] Firewall rules not added: %v\n", err)
+			fmt.Println("       You may need to run as Administrator")
+		} else {
+			fmt.Println("[ OK ] Firewall rules configured")
+		}
+	}()
+
+	// Print startup info
+	ips := identity.GetLocalIPs()
+	ipStr := "unknown"
+	if len(ips) > 0 {
+		ipStr = ips[len(ips)-1] // prefer last (usually the LAN IP)
 	}
 
-	fmt.Println("[ OK ] NetFiles يعمل الآن")
-	fmt.Printf("       الاسم: %s\n", cfg.DisplayName)
-	fmt.Printf("       المعرف: %s\n", cfg.ShortID())
-	fmt.Printf("       المنافذ: HTTP %d / UDP %d\n", cfg.HTTPPort, cfg.UDPPort)
-	fmt.Printf("       المجلد: %s\n", cfg.RootFolder)
+	fmt.Println("  -----------------------------------------")
+	fmt.Printf("  Name      : \033[1;32m%s\033[0m\n", cfg.DisplayName)
+	fmt.Printf("  Device ID : \033[90m%s\033[0m\n", cfg.ShortID())
+	fmt.Printf("  IP        : \033[36m%s\033[0m\n", ipStr)
+	fmt.Printf("  HTTP Port : \033[36m%d\033[0m\n", cfg.HTTPPort)
+	fmt.Printf("  UDP Port  : \033[36m%d\033[0m\n", cfg.UDPPort)
+	fmt.Printf("  Folder    : \033[1;33m%s\033[0m\n", cfg.RootFolder)
+	fmt.Println("  -----------------------------------------")
+	fmt.Println()
 
 	// Start the HTTP server (blocks)
 	srv := server.New(cfg)
-	fmt.Println("[ OK ] الخادم جاهز للاستقبال")
+	fmt.Println("[ \033[32mOK\033[0m ] Server is listening")
+	fmt.Println("       Press Ctrl+C to stop")
+	fmt.Println()
 	err = srv.ListenAndServe()
 	if err != nil {
-		fmt.Printf("[FAIL] خطأ في الخادم: %v\n", err)
+		fmt.Printf("[FAIL] Server error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
 func cmdStop() {
-	cfg, err := config.Load()
+	_, err := config.Load()
 	if err != nil {
-		fmt.Println("[FAIL] لم يتم العثور على إعدادات NetFiles")
+		fmt.Println("[FAIL] NetFiles config not found")
 		os.Exit(1)
 	}
 
 	// Remove firewall rules
 	err = firewall.RemoveRules()
 	if err != nil {
-		fmt.Printf("[WARN] لم يتم إزالة قواعد جدار الحماية: %v\n", err)
+		fmt.Printf("[WARN] Failed to remove firewall rules: %v\n", err)
 	}
 
 	// Remove autostart
 	err = config.SetAutostart(false)
 	if err != nil {
-		fmt.Printf("[WARN] لم يتم إزالة البدء التلقائي: %v\n", err)
+		fmt.Printf("[WARN] Failed to remove autostart: %v\n", err)
 	}
 
-	fmt.Println("[ OK ] تم إيقاف NetFiles")
-	_ = cfg
+	fmt.Println("[ OK ] NetFiles stopped")
 }
 
 func cmdUninstall(args []string) {
@@ -213,11 +252,11 @@ func cmdUninstall(args []string) {
 	}
 
 	if !force && isTerminal() {
-		fmt.Print("هل تريد حذف NetFiles بالكامل؟ سيتم حذف جميع الملفات. [y/N] ")
+		fmt.Print("Remove NetFiles completely? All files will be deleted. [y/N] ")
 		var answer string
 		fmt.Scanln(&answer)
 		if !strings.EqualFold(answer, "y") && !strings.EqualFold(answer, "yes") {
-			fmt.Println("تم الإلغاء.")
+			fmt.Println("Cancelled.")
 			return
 		}
 	}
@@ -226,7 +265,7 @@ func cmdUninstall(args []string) {
 	cmdStop()
 
 	cfg, _ := config.Load()
-	rootFolder := config.DefaultRootFolder
+	rootFolder := config.GetDefaultRootFolder()
 	if cfg != nil {
 		rootFolder = cfg.RootFolder
 	}
@@ -234,53 +273,56 @@ func cmdUninstall(args []string) {
 	// Remove folders
 	err := os.RemoveAll(rootFolder)
 	if err != nil {
-		fmt.Printf("[WARN] لم يتم حذف المجلد %s: %v\n", rootFolder, err)
+		fmt.Printf("[WARN] Failed to delete %s: %v\n", rootFolder, err)
 	} else {
-		fmt.Printf("[ OK ] تم حذف %s\n", rootFolder)
+		fmt.Printf("[ OK ] Deleted %s\n", rootFolder)
 	}
 
 	// Remove config directory
 	err = os.RemoveAll(config.ConfigDir)
 	if err != nil {
-		fmt.Printf("[WARN] لم يتم حذف الإعدادات: %v\n", err)
+		fmt.Printf("[WARN] Failed to delete config: %v\n", err)
 	} else {
-		fmt.Println("[ OK ] تم حذف الإعدادات")
+		fmt.Println("[ OK ] Config deleted")
 	}
 
-	fmt.Println("[ OK ] تم إزالة NetFiles بالكامل")
+	fmt.Println("[ OK ] NetFiles fully removed")
 }
 
 func cmdStatus() {
 	cfg, err := config.Load()
 	if err != nil {
-		fmt.Println("[FAIL] لم يتم العثور على إعدادات NetFiles. البرنامج غير مثبت.")
+		fmt.Println("[FAIL] NetFiles config not found. Not installed.")
 		os.Exit(1)
 	}
 
-	fmt.Println("=== حالة NetFiles ===")
-	fmt.Printf("الاسم:    %s\n", cfg.DisplayName)
-	fmt.Printf("المعرف:   %s\n", cfg.ShortID())
-	fmt.Printf("المنافذ:  HTTP %d / UDP %d\n", cfg.HTTPPort, cfg.UDPPort)
-	fmt.Printf("المجلد:   %s\n", cfg.RootFolder)
+	printSplash()
+
+	fmt.Println("  === NetFiles Status ===")
+	fmt.Printf("  Name      : %s\n", cfg.DisplayName)
+	fmt.Printf("  Device ID : %s\n", cfg.ShortID())
+	fmt.Printf("  Ports     : HTTP %d / UDP %d\n", cfg.HTTPPort, cfg.UDPPort)
+	fmt.Printf("  Folder    : %s\n", cfg.RootFolder)
 
 	ips := identity.GetLocalIPs()
 	if len(ips) > 0 {
-		fmt.Printf("العناوين: %s\n", strings.Join(ips, ", "))
+		fmt.Printf("  IPs       : %s\n", strings.Join(ips, ", "))
 	}
 
 	// Check if running
 	running := ports.IsPortInUse(cfg.HTTPPort)
 	if running {
-		fmt.Println("الحالة:   🟢 يعمل")
+		fmt.Println("  Status    : \033[32m● Running\033[0m")
 	} else {
-		fmt.Println("الحالة:   🔴 متوقف")
+		fmt.Println("  Status    : \033[31m● Stopped\033[0m")
 	}
+	fmt.Println()
 }
 
 func cmdRename(args []string) {
 	cfg, err := config.Load()
 	if err != nil {
-		fmt.Println("[FAIL] لم يتم العثور على إعدادات NetFiles")
+		fmt.Println("[FAIL] NetFiles config not found")
 		os.Exit(1)
 	}
 
@@ -291,12 +333,12 @@ func cmdRename(args []string) {
 	} else if isTerminal() {
 		name, err := identity.PromptName(cfg.NamePrefix)
 		if err != nil {
-			fmt.Printf("[FAIL] خطأ: %v\n", err)
+			fmt.Printf("[FAIL] Error: %v\n", err)
 			os.Exit(1)
 		}
 		newName = name
 	} else {
-		fmt.Println("[FAIL] يجب تحديد الاسم: netfiles rename <name|number>")
+		fmt.Println("[FAIL] Name required: netfiles rename <name|number>")
 		os.Exit(1)
 	}
 
@@ -304,17 +346,17 @@ func cmdRename(args []string) {
 	cfg.DisplayName = newName
 	err = config.Save(cfg)
 	if err != nil {
-		fmt.Printf("[FAIL] لم يتم حفظ الاسم الجديد: %v\n", err)
+		fmt.Printf("[FAIL] Failed to save new name: %v\n", err)
 		os.Exit(1)
 	}
 
 	// Rename the folder if it exists
 	err = folders.RenamePeerFolder(cfg.RootFolder, oldName, newName)
 	if err != nil {
-		fmt.Printf("[WARN] لم يتم تغيير اسم المجلد: %v\n", err)
+		fmt.Printf("[WARN] Failed to rename folder: %v\n", err)
 	}
 
-	fmt.Printf("[ OK ] تم تغيير الاسم: %s -> %s\n", oldName, newName)
+	fmt.Printf("[ OK ] Renamed: %s -> %s\n", oldName, newName)
 }
 
 func cmdSetup(args []string) {
@@ -324,25 +366,14 @@ func cmdSetup(args []string) {
 }
 
 func cmdAbout() {
-	fmt.Println()
-	fmt.Println(`        /\            /\`)
-	fmt.Println(`       /  \__      __/  \`)
-	fmt.Println(`      / /\   \____/   /\ \`)
-	fmt.Println(`     / /  \  (O)  (O)  /  \ \`)
-	fmt.Println(`     \/    \____\/____/    \/`)
-	fmt.Println(`            \  \/\/  /`)
-	fmt.Println(`             \______/`)
-	fmt.Println()
-	fmt.Printf("  NetFiles v%s\n", Version)
-	fmt.Printf("  %s\n", Credit)
-	fmt.Println()
+	printSplash()
 }
 
 func printUsage() {
 	fmt.Println()
-	fmt.Println("NetFiles — أداة مشاركة الملفات عبر الشبكة المحلية")
+	fmt.Println("NetFiles — Offline LAN File Sharing Tool")
 	fmt.Printf("%s\n\n", Credit)
-	fmt.Println("الاستخدام:")
+	fmt.Println("Usage:")
 	fmt.Println("  netfiles start [-Port N] [-Name X | -Number N] [-Password X] [-Folder path] [-Autostart]")
 	fmt.Println("  netfiles stop")
 	fmt.Println("  netfiles uninstall [-Force]")
