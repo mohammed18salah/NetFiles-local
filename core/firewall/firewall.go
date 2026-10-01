@@ -1,11 +1,12 @@
 // NetFiles firewall package — Windows firewall rule management
 // Created by Mohammed Salah
+//go:build windows
+
 package firewall
 
 import (
 	"fmt"
 	"os/exec"
-	"runtime"
 	"strings"
 	"syscall"
 )
@@ -16,15 +17,11 @@ const (
 )
 
 // EnsureRules adds firewall rules for the given ports.
-// On Windows, uses netsh advfirewall. Will self-elevate via UAC if needed.
+// Uses netsh advfirewall. Will self-elevate via UAC if needed.
 func EnsureRules(httpPort, udpPort int) error {
-	if runtime.GOOS != "windows" {
-		return nil // Linux: iptables handling can be added later
-	}
-
-	// Check if rules already exist with correct ports
+	// Check if rules already exist
 	if ruleExists(ruleTCP) && ruleExists(ruleUDP) {
-		return nil // Already configured
+		return nil
 	}
 
 	// Try to add rules (may fail without admin)
@@ -48,13 +45,8 @@ func EnsureRules(httpPort, udpPort int) error {
 
 // RemoveRules removes all NetFilesTool firewall rules
 func RemoveRules() error {
-	if runtime.GOOS != "windows" {
-		return nil
-	}
-
 	var lastErr error
 
-	// Remove TCP rule
 	if ruleExists(ruleTCP) {
 		err := runNetsh("advfirewall", "firewall", "delete", "rule", fmt.Sprintf("name=%s", ruleTCP))
 		if err != nil {
@@ -62,7 +54,6 @@ func RemoveRules() error {
 		}
 	}
 
-	// Remove UDP rule
 	if ruleExists(ruleUDP) {
 		err := runNetsh("advfirewall", "firewall", "delete", "rule", fmt.Sprintf("name=%s", ruleUDP))
 		if err != nil {
@@ -114,46 +105,25 @@ func runNetsh(args ...string) error {
 	if err != nil {
 		return fmt.Errorf("netsh error: %s: %w", string(output), err)
 	}
-	if strings.Contains(string(output), "Ok.") || strings.Contains(string(output), "تم") {
-		return nil
-	}
-	// Some versions of Windows don't print "Ok." but still succeed
 	return nil
 }
 
 func elevateAndAddRules(httpPort, udpPort int) error {
-	exe, err := exec.LookPath("netsh")
-	if err != nil {
-		return err
-	}
-
-	// Build the commands as a script
 	script := fmt.Sprintf(
 		`netsh advfirewall firewall add rule name=%s dir=in action=allow protocol=TCP localport=%d profile=private enable=yes & `+
-		`netsh advfirewall firewall add rule name=%s dir=in action=allow protocol=UDP localport=%d profile=private enable=yes`,
+			`netsh advfirewall firewall add rule name=%s dir=in action=allow protocol=UDP localport=%d profile=private enable=yes`,
 		ruleTCP, httpPort, ruleUDP, udpPort,
 	)
 
-	// Use PowerShell's Start-Process with -Verb RunAs for UAC elevation
 	cmd := exec.Command("powershell", "-Command",
 		fmt.Sprintf(`Start-Process -FilePath "cmd.exe" -ArgumentList '/c %s' -Verb RunAs -Wait -WindowStyle Hidden`, script),
 	)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	err = cmd.Run()
-	if err != nil {
-		return fmt.Errorf("فشل الحصول على صلاحيات المسؤول: %w", err)
-	}
-
-	_ = exe
-	return nil
+	return cmd.Run()
 }
 
 // CheckNetworkProfile checks if the current network profile is Private
 func CheckNetworkProfile() (isPrivate bool, profileName string, err error) {
-	if runtime.GOOS != "windows" {
-		return true, "Linux", nil
-	}
-
 	cmd := exec.Command("powershell", "-Command",
 		"(Get-NetConnectionProfile | Select-Object -First 1).NetworkCategory")
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}

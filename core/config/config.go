@@ -10,14 +10,12 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-
-	"golang.org/x/sys/windows/registry"
 )
 
 const (
-	AppName          = "NetFilesTool"
-	DefaultHTTPPort  = 47831
-	DefaultUDPPort   = 47832
+	AppName           = "NetFilesTool"
+	DefaultHTTPPort   = 47831
+	DefaultUDPPort    = 47832
 	DefaultRootFolder = `C:\NetFiles`
 	DefaultNamePrefix = "PC-"
 )
@@ -33,24 +31,24 @@ func init() {
 }
 
 type Config struct {
-	DeviceID    string `json:"device_id"`
-	DisplayName string `json:"display_name"`
-	NamePrefix  string `json:"name_prefix"`
-	HTTPPort    int    `json:"http_port"`
-	UDPPort     int    `json:"udp_port"`
-	RootFolder  string `json:"root_folder"`
-	PasswordHash string `json:"password_hash,omitempty"`
-	FirstSeen   string `json:"first_seen"`
-	Aliases     map[string]string `json:"aliases,omitempty"` // device_id -> local nickname
+	DeviceID     string            `json:"device_id"`
+	DisplayName  string            `json:"display_name"`
+	NamePrefix   string            `json:"name_prefix"`
+	HTTPPort     int               `json:"http_port"`
+	UDPPort      int               `json:"udp_port"`
+	RootFolder   string            `json:"root_folder"`
+	PasswordHash string            `json:"password_hash,omitempty"`
+	FirstSeen    string            `json:"first_seen"`
+	Aliases      map[string]string `json:"aliases,omitempty"` // device_id -> local nickname
 }
 
 func Default() *Config {
 	return &Config{
-		NamePrefix:  DefaultNamePrefix,
-		HTTPPort:    DefaultHTTPPort,
-		UDPPort:     DefaultUDPPort,
-		RootFolder:  DefaultRootFolder,
-		Aliases:     make(map[string]string),
+		NamePrefix: DefaultNamePrefix,
+		HTTPPort:   DefaultHTTPPort,
+		UDPPort:    DefaultUDPPort,
+		RootFolder: DefaultRootFolder,
+		Aliases:    make(map[string]string),
 	}
 }
 
@@ -101,35 +99,4 @@ func Save(cfg *Config) error {
 	}
 
 	return os.WriteFile(configPath(), data, 0644)
-}
-
-func SetAutostart(enable bool) error {
-	if runtime.GOOS != "windows" {
-		return nil // TODO: Linux systemd / cron
-	}
-
-	keyPath := `SOFTWARE\Microsoft\Windows\CurrentVersion\Run`
-	key, err := registry.OpenKey(registry.CURRENT_USER, keyPath, registry.SET_VALUE|registry.QUERY_VALUE)
-	if err != nil {
-		return fmt.Errorf("لم يتم فتح سجل البدء التلقائي: %w", err)
-	}
-	defer key.Close()
-
-	valueName := AppName
-
-	if enable {
-		exe, err := os.Executable()
-		if err != nil {
-			return fmt.Errorf("لم يتم العثور على مسار البرنامج: %w", err)
-		}
-		return key.SetStringValue(valueName, fmt.Sprintf(`"%s" start -y`, exe))
-	}
-
-	// Disable: delete the value (ignore if not found)
-	err = key.DeleteValue(valueName)
-	if err != nil {
-		// Ignore "not found" errors
-		return nil
-	}
-	return nil
 }
