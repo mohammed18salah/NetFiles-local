@@ -1,21 +1,23 @@
-// NetFiles — offline LAN file-sharing tool
+// NetFiles — offline LAN file-sharing & Windows Network setup tool
 // Created by Mohammed Salah
 //
-// Main entry point: handles CLI commands and service startup.
+// Portable single-binary tool for Windows 10/11.
+// Configures native Windows Network sharing (SMB) on Desktop with zero background overhead.
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"strings"
 	"time"
 
 	"netfiles/core/config"
-	"netfiles/core/firewall"
 	"netfiles/core/folders"
 	"netfiles/core/identity"
 	"netfiles/core/ports"
 	"netfiles/core/server"
+	"netfiles/core/sharing"
 )
 
 const (
@@ -33,23 +35,30 @@ func main() {
 	}
 
 	switch cmd {
+	case "setup", "install", "share":
+		cmdSetup(args[1:])
 	case "start":
-		cmdStart(args[1:])
+		// If -serve or -daemon flag is passed, run the HTTP daemon
+		if hasFlag(args, "-serve") || hasFlag(args, "--serve") || hasFlag(args, "-daemon") {
+			cmdServe(args[1:])
+		} else {
+			cmdSetup(args[1:])
+		}
+	case "serve":
+		cmdServe(args[1:])
 	case "stop":
 		cmdStop()
-	case "uninstall":
+	case "uninstall", "remove", "unshare":
 		cmdUninstall(args[1:])
 	case "status":
 		cmdStatus()
 	case "rename":
 		cmdRename(args[1:])
-	case "setup":
-		cmdSetup(args[1:])
-	case "about", "--version":
+	case "about", "--version", "-v":
 		cmdAbout()
 	case "":
-		// No args: start service
-		cmdStart(nil)
+		// Double-clicked or launched with no args: run one-time setup
+		cmdSetup(nil)
 	default:
 		fmt.Printf("Unknown command: %s\n", cmd)
 		printUsage()
@@ -63,6 +72,14 @@ func isTerminal() bool {
 		return false
 	}
 	return fi.Mode()&os.ModeCharDevice != 0
+}
+
+func waitForEnter() {
+	if isTerminal() {
+		fmt.Println("  Press Enter to exit...")
+		var buf [1]byte
+		_, _ = os.Stdin.Read(buf[:])
+	}
 }
 
 func printSplash() {
@@ -80,12 +97,24 @@ func printSplash() {
 	fmt.Println()
 }
 
-func cmdStart(args []string) {
-	flags := parseStartFlags(args)
+// cmdSetup performs the one-time Windows Network SMB sharing configuration
+func cmdSetup(args []string) {
+	printSplash()
 
-	// Always show bat splash on startup unless explicitly disabled with --plain
-	if !flags.plain {
-		printSplash()
+	// Check if running as administrator; if not, request elevation
+	if !sharing.IsElevated() {
+		fmt.Println("  [!] Administrator privileges are required to configure Windows Network share.")
+		fmt.Println("      Requesting elevation...")
+		time.Sleep(300 * time.Millisecond)
+
+		err := sharing.Elevate(os.Args[1:])
+		if err != nil {
+			fmt.Printf("  [FAIL] Could not elevate privileges: %v\n", err)
+			fmt.Println("         Please right-click netfiles.exe and choose 'Run as administrator'.")
+			waitForEnter()
+			os.Exit(1)
+		}
+		os.Exit(0)
 	}
 
 	// Load or create config
@@ -94,156 +123,101 @@ func cmdStart(args []string) {
 		cfg = config.Default()
 	}
 
-	// Apply CLI flags
-	if flags.port > 0 {
-		cfg.HTTPPort = flags.port
-	}
-	if flags.folder != "" {
-		cfg.RootFolder = flags.folder
-	}
-	if flags.password != "" {
-		cfg.SetPassword(flags.password)
+	targetFolder := cfg.RootFolder
+	if targetFolder == "" {
+		targetFolder = config.GetDefaultRootFolder()
+		cfg.RootFolder = targetFolder
 	}
 
-	// Identity: name prompt or CLI flag
-	if flags.name != "" {
-		cfg.DisplayName = identity.SanitizeName(flags.name)
-	} else if flags.number > 0 {
-		cfg.DisplayName = identity.NumberToName(flags.number, cfg.NamePrefix)
+	fmt.Println("  === One-Time Windows Network Setup ===")
+	fmt.Println("  [1/4] Preparing Desktop folder structure...")
+	err = folders.CreateLayout(targetFolder, cfg.DisplayName)
+	if err != nil {
+		fmt.Printf("  [FAIL] Failed to create folder layout: %v\n", err)
+		waitForEnter()
+		os.Exit(1)
 	}
 
+	fmt.Println("  [2/4] Setting folder permissions for LAN access...")
+	fmt.Println("  [3/4] Enabling Network Discovery and File Sharing services...")
+	fmt.Println("  [4/4] Creating Windows Network SMB share 'NetFiles'...")
+
+	info, err := sharing.SetupShare(targetFolder)
+	if err != nil {
+		fmt.Printf("  [FAIL] Error configuring Windows share: %v\n", err)
+		waitForEnter()
+		os.Exit(1)
+	}
+
+	// Save configuration
 	if cfg.DeviceID == "" {
 		cfg.DeviceID = identity.GenerateDeviceID()
 	}
-
 	if cfg.FirstSeen == "" {
 		cfg.FirstSeen = time.Now().Format(time.RFC3339)
 	}
+	_ = config.Save(cfg)
 
-	if cfg.DisplayName == "" {
-		// Check name.txt next to exe
-		exeName := identity.ReadNameFile()
-		if exeName != "" {
-			cfg.DisplayName = identity.SanitizeName(exeName)
-		} else if isTerminal() {
-			// Interactive prompt
-			name, err := identity.PromptName(cfg.NamePrefix)
-			if err != nil {
-				fmt.Printf("[FAIL] Name input error: %v\n", err)
-				os.Exit(1)
-			}
-			cfg.DisplayName = name
-		} else {
-			// Fallback: use IP octets
-			cfg.DisplayName = identity.FallbackName()
-		}
-	}
-
-	// Port check & auto-pick
-	httpPort, err := ports.FindFreePort(cfg.HTTPPort)
-	if err != nil {
-		fmt.Printf("[FAIL] Cannot find free HTTP port: %v\n", err)
-		os.Exit(1)
-	}
-	if httpPort != cfg.HTTPPort {
-		fmt.Printf("[INFO] Port %d busy, using %d instead\n", cfg.HTTPPort, httpPort)
-	}
-	cfg.HTTPPort = httpPort
-
-	udpPort, err := ports.FindFreePort(cfg.UDPPort)
-	if err != nil {
-		fmt.Printf("[FAIL] Cannot find free UDP port: %v\n", err)
-		os.Exit(1)
-	}
-	if udpPort != cfg.UDPPort {
-		fmt.Printf("[INFO] Port %d busy, using %d instead\n", cfg.UDPPort, udpPort)
-	}
-	cfg.UDPPort = udpPort
-
-	// Create folder layout
-	err = folders.CreateLayout(cfg.RootFolder, cfg.DisplayName)
-	if err != nil {
-		fmt.Printf("[FAIL] Cannot create folders: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Save config BEFORE firewall (firewall may UAC-prompt and block)
-	err = config.Save(cfg)
-	if err != nil {
-		fmt.Printf("[WARN] Failed to save config: %v\n", err)
-	}
-
-	// Register autostart if requested
-	if flags.autostart {
-		err = config.SetAutostart(true)
-		if err != nil {
-			fmt.Printf("[WARN] Failed to register autostart: %v\n", err)
-		}
-	}
-
-	// Add firewall rules (may need elevation — non-fatal)
-	go func() {
-		err := firewall.EnsureRules(cfg.HTTPPort, cfg.UDPPort)
-		if err != nil {
-			fmt.Printf("[WARN] Firewall rules not added: %v\n", err)
-			fmt.Println("       You may need to run as Administrator")
-		} else {
-			fmt.Println("[ OK ] Firewall rules configured")
-		}
-	}()
-
-	// Print startup info
-	ips := identity.GetLocalIPs()
-	ipStr := "unknown"
-	if len(ips) > 0 {
-		ipStr = ips[len(ips)-1] // prefer last (usually the LAN IP)
-	}
-
-	fmt.Println("  -----------------------------------------")
-	fmt.Printf("  Name      : \033[1;32m%s\033[0m\n", cfg.DisplayName)
-	fmt.Printf("  Device ID : \033[90m%s\033[0m\n", cfg.ShortID())
-	fmt.Printf("  IP        : \033[36m%s\033[0m\n", ipStr)
-	fmt.Printf("  HTTP Port : \033[36m%d\033[0m\n", cfg.HTTPPort)
-	fmt.Printf("  UDP Port  : \033[36m%d\033[0m\n", cfg.UDPPort)
-	fmt.Printf("  Folder    : \033[1;33m%s\033[0m\n", cfg.RootFolder)
-	fmt.Println("  -----------------------------------------")
+	// Display completion card
+	fmt.Println()
+	fmt.Println("  \033[1;32m============================================================\033[0m")
+	fmt.Println("  \033[1;32m   [ OK ] NetFiles Shared Successfully on Windows Network   \033[0m")
+	fmt.Println("  \033[1;32m============================================================\033[0m")
+	fmt.Printf("   Share Name    : \033[1;36m%s\033[0m\n", info.ShareName)
+	fmt.Printf("   Network Path  : \033[1;33m%s\033[0m\n", info.UNCPath)
+	fmt.Printf("   Local Folder  : %s\n", info.LocalPath)
+	fmt.Printf("   Computer Name : %s\n", info.ComputerName)
+	fmt.Printf("   LAN IP        : %s\n", info.IPAddress)
+	fmt.Println("  ------------------------------------------------------------")
+	fmt.Println("   \033[1mHow to access from other computers on your LAN:\033[0m")
+	fmt.Println("   1. Open Windows Explorer -> Click 'Network' on the left.")
+	fmt.Printf("   2. Double-click '\033[1;36m%s\033[0m' -> Open '\033[1;36mNetFiles\033[0m'.\n", info.ComputerName)
+	fmt.Printf("   OR type in address bar: \033[1;33m%s\033[0m\n", info.UNCPath)
+	fmt.Println("  ------------------------------------------------------------")
+	fmt.Println("   \033[90mNOTE: This was a one-time setup. You do NOT need to keep\033[0m")
+	fmt.Println("   \033[90m      this tool running. Windows manages the share natively.\033[0m")
+	fmt.Println("  \033[1;32m============================================================\033[0m")
 	fmt.Println()
 
-	// Start the HTTP server (blocks)
-	srv := server.New(cfg)
-	fmt.Println("[ \033[32mOK\033[0m ] Server is listening")
-	fmt.Println("       Press Ctrl+C to stop")
-	fmt.Println()
-	err = srv.ListenAndServe()
-	if err != nil {
-		fmt.Printf("[FAIL] Server error: %v\n", err)
-		os.Exit(1)
-	}
+	waitForEnter()
 }
 
-func cmdStop() {
-	_, err := config.Load()
-	if err != nil {
-		fmt.Println("[FAIL] NetFiles config not found")
-		os.Exit(1)
+func cmdStatus() {
+	printSplash()
+
+	cfg, _ := config.Load()
+	targetFolder := config.GetDefaultRootFolder()
+	if cfg != nil && cfg.RootFolder != "" {
+		targetFolder = cfg.RootFolder
 	}
 
-	// Remove firewall rules
-	err = firewall.RemoveRules()
-	if err != nil {
-		fmt.Printf("[WARN] Failed to remove firewall rules: %v\n", err)
-	}
+	info, _ := sharing.GetShareInfo(targetFolder)
 
-	// Remove autostart
-	err = config.SetAutostart(false)
-	if err != nil {
-		fmt.Printf("[WARN] Failed to remove autostart: %v\n", err)
-	}
+	fmt.Println("  === NetFiles Status ===")
+	fmt.Printf("  Local Folder  : %s\n", info.LocalPath)
+	fmt.Printf("  Computer Name : %s\n", info.ComputerName)
+	fmt.Printf("  LAN IP        : %s\n", info.IPAddress)
+	fmt.Printf("  Network Path  : %s\n", info.UNCPath)
 
-	fmt.Println("[ OK ] NetFiles stopped")
+	if info.IsShared {
+		fmt.Println("  Status        : \033[1;32m● Active on Windows Network (Shared)\033[0m")
+	} else {
+		fmt.Println("  Status        : \033[1;31m● Not Shared\033[0m (Run 'netfiles setup' to enable)")
+	}
+	fmt.Println()
+	waitForEnter()
 }
 
 func cmdUninstall(args []string) {
+	printSplash()
+
+	if !sharing.IsElevated() {
+		fmt.Println("  [!] Administrator privileges are required to remove network share.")
+		fmt.Println("      Requesting elevation...")
+		_ = sharing.Elevate(os.Args[1:])
+		os.Exit(0)
+	}
+
 	force := false
 	for _, a := range args {
 		if strings.EqualFold(a, "-force") || strings.EqualFold(a, "--force") {
@@ -252,77 +226,58 @@ func cmdUninstall(args []string) {
 	}
 
 	if !force && isTerminal() {
-		fmt.Print("Remove NetFiles completely? All files will be deleted. [y/N] ")
-		var answer string
-		fmt.Scanln(&answer)
+		fmt.Print("  Remove NetFiles share from Windows Network? [y/N] ")
+		reader := bufio.NewReader(os.Stdin)
+		line, _ := reader.ReadString('\n')
+		answer := strings.TrimSpace(line)
 		if !strings.EqualFold(answer, "y") && !strings.EqualFold(answer, "yes") {
-			fmt.Println("Cancelled.")
+			fmt.Println("  Cancelled.")
+			waitForEnter()
 			return
 		}
 	}
 
-	// Stop first
-	cmdStop()
-
-	cfg, _ := config.Load()
-	rootFolder := config.GetDefaultRootFolder()
-	if cfg != nil {
-		rootFolder = cfg.RootFolder
-	}
-
-	// Remove folders
-	err := os.RemoveAll(rootFolder)
+	// Remove SMB share
+	err := sharing.RemoveShare()
 	if err != nil {
-		fmt.Printf("[WARN] Failed to delete %s: %v\n", rootFolder, err)
+		fmt.Printf("  [WARN] Failed to remove share: %v\n", err)
 	} else {
-		fmt.Printf("[ OK ] Deleted %s\n", rootFolder)
+		fmt.Println("  [ OK ] Windows Network share removed")
 	}
 
-	// Remove config directory
-	err = os.RemoveAll(config.ConfigDir)
-	if err != nil {
-		fmt.Printf("[WARN] Failed to delete config: %v\n", err)
-	} else {
-		fmt.Println("[ OK ] Config deleted")
+	// Remove config
+	_ = os.RemoveAll(config.ConfigDir)
+	fmt.Println("  [ OK ] NetFiles configuration removed")
+
+	if force {
+		cfg, _ := config.Load()
+		targetFolder := config.GetDefaultRootFolder()
+		if cfg != nil && cfg.RootFolder != "" {
+			targetFolder = cfg.RootFolder
+		}
+		_ = os.RemoveAll(targetFolder)
+		fmt.Printf("  [ OK ] Folder %s deleted\n", targetFolder)
 	}
 
-	fmt.Println("[ OK ] NetFiles fully removed")
+	fmt.Println()
+	fmt.Println("  [ OK ] NetFiles has been completely uninstalled.")
+	fmt.Println()
+	waitForEnter()
 }
 
-func cmdStatus() {
-	cfg, err := config.Load()
+func cmdStop() {
+	err := sharing.RemoveShare()
 	if err != nil {
-		fmt.Println("[FAIL] NetFiles config not found. Not installed.")
-		os.Exit(1)
-	}
-
-	printSplash()
-
-	fmt.Println("  === NetFiles Status ===")
-	fmt.Printf("  Name      : %s\n", cfg.DisplayName)
-	fmt.Printf("  Device ID : %s\n", cfg.ShortID())
-	fmt.Printf("  Ports     : HTTP %d / UDP %d\n", cfg.HTTPPort, cfg.UDPPort)
-	fmt.Printf("  Folder    : %s\n", cfg.RootFolder)
-
-	ips := identity.GetLocalIPs()
-	if len(ips) > 0 {
-		fmt.Printf("  IPs       : %s\n", strings.Join(ips, ", "))
-	}
-
-	// Check if running
-	running := ports.IsPortInUse(cfg.HTTPPort)
-	if running {
-		fmt.Println("  Status    : \033[32m● Running\033[0m")
+		fmt.Printf("[WARN] Failed to unshare: %v\n", err)
 	} else {
-		fmt.Println("  Status    : \033[31m● Stopped\033[0m")
+		fmt.Println("[ OK ] NetFiles network share stopped")
 	}
-	fmt.Println()
 }
 
 func cmdRename(args []string) {
 	cfg, err := config.Load()
 	if err != nil {
-		fmt.Println("[FAIL] NetFiles config not found")
+		fmt.Println("[FAIL] NetFiles config not found. Run setup first.")
 		os.Exit(1)
 	}
 
@@ -344,29 +299,44 @@ func cmdRename(args []string) {
 
 	oldName := cfg.DisplayName
 	cfg.DisplayName = newName
-	err = config.Save(cfg)
-	if err != nil {
-		fmt.Printf("[FAIL] Failed to save new name: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Rename the folder if it exists
-	err = folders.RenamePeerFolder(cfg.RootFolder, oldName, newName)
-	if err != nil {
-		fmt.Printf("[WARN] Failed to rename folder: %v\n", err)
-	}
+	_ = config.Save(cfg)
 
 	fmt.Printf("[ OK ] Renamed: %s -> %s\n", oldName, newName)
 }
 
-func cmdSetup(args []string) {
-	// Stage (f) will add the pacman-style setup screen
-	// For now, just run start
-	cmdStart(args)
-}
-
 func cmdAbout() {
 	printSplash()
+	waitForEnter()
+}
+
+func cmdServe(args []string) {
+	printSplash()
+
+	cfg, err := config.Load()
+	if err != nil {
+		cfg = config.Default()
+	}
+
+	httpPort, _ := ports.FindFreePort(cfg.HTTPPort)
+	cfg.HTTPPort = httpPort
+
+	udpPort, _ := ports.FindFreePort(cfg.UDPPort)
+	cfg.UDPPort = udpPort
+
+	srv := server.New(cfg)
+	fmt.Printf("  [ OK ] NetFiles HTTP transfer server listening on port %d\n", cfg.HTTPPort)
+	fmt.Println("         Press Ctrl+C to stop")
+	fmt.Println()
+	_ = srv.ListenAndServe()
+}
+
+func hasFlag(args []string, flag string) bool {
+	for _, a := range args {
+		if strings.EqualFold(a, flag) {
+			return true
+		}
+	}
+	return false
 }
 
 func printUsage() {
@@ -374,67 +344,12 @@ func printUsage() {
 	fmt.Println("NetFiles — Offline LAN File Sharing Tool")
 	fmt.Printf("%s\n\n", Credit)
 	fmt.Println("Usage:")
-	fmt.Println("  netfiles start [-Port N] [-Name X | -Number N] [-Password X] [-Folder path] [-Autostart]")
-	fmt.Println("  netfiles stop")
-	fmt.Println("  netfiles uninstall [-Force]")
-	fmt.Println("  netfiles status")
-	fmt.Println("  netfiles rename [name|number]")
-	fmt.Println("  netfiles setup")
-	fmt.Println("  netfiles about")
-	fmt.Println("  netfiles --version")
-}
-
-type startFlags struct {
-	port      int
-	name      string
-	number    int
-	password  string
-	folder    string
-	autostart bool
-	noConfirm bool
-	noAnim    bool
-	plain     bool
-}
-
-func parseStartFlags(args []string) startFlags {
-	f := startFlags{}
-	for i := 0; i < len(args); i++ {
-		a := strings.ToLower(args[i])
-		switch a {
-		case "-port":
-			if i+1 < len(args) {
-				i++
-				fmt.Sscanf(args[i], "%d", &f.port)
-			}
-		case "-name":
-			if i+1 < len(args) {
-				i++
-				f.name = args[i]
-			}
-		case "-number":
-			if i+1 < len(args) {
-				i++
-				fmt.Sscanf(args[i], "%d", &f.number)
-			}
-		case "-password":
-			if i+1 < len(args) {
-				i++
-				f.password = args[i]
-			}
-		case "-folder":
-			if i+1 < len(args) {
-				i++
-				f.folder = args[i]
-			}
-		case "-autostart":
-			f.autostart = true
-		case "-y", "--noconfirm":
-			f.noConfirm = true
-		case "--no-anim":
-			f.noAnim = true
-		case "--plain":
-			f.plain = true
-		}
-	}
-	return f
+	fmt.Println("  netfiles                   # One-time setup (creates Desktop share on Windows Network)")
+	fmt.Println("  netfiles setup             # One-time setup & network sharing")
+	fmt.Println("  netfiles status            # Check network share status")
+	fmt.Println("  netfiles uninstall [-Force]# Remove share and configuration")
+	fmt.Println("  netfiles rename <name>     # Update device display name")
+	fmt.Println("  netfiles serve             # (Optional) Start standalone HTTP server")
+	fmt.Println("  netfiles about             # Show app information")
+	fmt.Println()
 }
