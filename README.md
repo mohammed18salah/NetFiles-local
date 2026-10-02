@@ -5,10 +5,17 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/mohammed18salah/NetFiles-local/releases/download/v1.0.0/netfiles.exe">
+    <img src="https://img.shields.io/badge/Download-netfiles.exe%20(v1.0.0)-2ea44f?style=for-the-badge&logo=windows&logoColor=white" alt="Download netfiles.exe">
+  </a>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Release-v1.0.0-blue.svg?style=flat-square" alt="Version">
   <img src="https://img.shields.io/badge/Language-Go%201.21+-00ADD8.svg?style=flat-square" alt="Go">
   <img src="https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011-0078D6.svg?style=flat-square" alt="Windows">
   <img src="https://img.shields.io/badge/Service-NetFilesSvc%20(LocalSystem)-green.svg?style=flat-square" alt="Service">
-  <img src="https://img.shields.io/badge/Architecture-Single%20Binary%20(Static)-blue.svg?style=flat-square" alt="Binary">
+  <img src="https://img.shields.io/badge/Binary-Static%20(7.47%20MB)-blue.svg?style=flat-square" alt="Binary">
   <img src="https://img.shields.io/badge/Network-Zero%20Internet%20%7C%20Link--Local-orange.svg?style=flat-square" alt="Network">
   <img src="https://img.shields.io/badge/License-MIT-gray.svg?style=flat-square" alt="License">
 </p>
@@ -16,9 +23,10 @@
 ---
 
 <p align="center">
-  <video src="IMG_1198.MP4" autoplay loop muted playsinline width="100%">
-    <img src="demo.gif" alt="NetFiles Demo" width="100%">
-  </video>
+  <img src="demo.gif" alt="NetFiles Live Demonstration" width="100%">
+</p>
+<p align="center">
+  <sub>Video showcase: <a href="IMG_1198.MP4">IMG_1198.MP4</a></sub>
 </p>
 
 ---
@@ -161,7 +169,12 @@ Launching `netfiles.exe` without arguments opens the built-in management interfa
 
 ## Quick Start
 
-### Installation
+### 1. Download Binary
+
+Download the pre-compiled static executable directly from the latest release:
+- **[Download netfiles.exe v1.0.0 (Windows 64-bit)](https://github.com/mohammed18salah/NetFiles-local/releases/download/v1.0.0/netfiles.exe)** (~7.47 MB, static binary)
+
+### 2. Installation
 
 Run the automated setup to provision the background service, configure firewall ports, and register Windows File Explorer links:
 
