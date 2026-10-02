@@ -68,12 +68,12 @@ func (c *Config) ShortID() string {
 	return c.DeviceID
 }
 
-func configPath() string {
+func ConfigPath() string {
 	return filepath.Join(ConfigDir, "config.json")
 }
 
 func Load() (*Config, error) {
-	data, err := os.ReadFile(configPath())
+	data, err := os.ReadFile(ConfigPath())
 	if err != nil {
 		return nil, fmt.Errorf("config file not found: %w", err)
 	}
@@ -102,5 +102,5 @@ func Save(cfg *Config) error {
 		return fmt.Errorf("config marshal error: %w", err)
 	}
 
-	return os.WriteFile(configPath(), data, 0644)
+	return os.WriteFile(ConfigPath(), data, 0644)
 }

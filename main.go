@@ -8,6 +8,7 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"strings"
@@ -67,13 +68,8 @@ func main() {
 		cmdRename(args[1:])
 	case "about", "--version", "-v":
 		cmdAbout()
-	case "":
-		// Double-click with no args: if service not installed, run Setup; otherwise show Status
-		if !service.IsInstalled() {
-			RunSetup(nil)
-		} else {
-			RunStatus()
-		}
+	case "menu", "panel", "control", "":
+		RunControlPanel()
 	default:
 		fmt.Printf("Unknown command: %s\n\n", cmd)
 		printUsage()
@@ -92,8 +88,8 @@ func isTerminal() bool {
 func waitForEnter() {
 	if isTerminal() {
 		fmt.Println("Press Enter to continue...")
-		var buf [1]byte
-		_, _ = os.Stdin.Read(buf[:])
+		reader := bufio.NewReader(os.Stdin)
+		_, _ = reader.ReadString('\n')
 	}
 }
 

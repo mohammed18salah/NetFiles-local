@@ -209,6 +209,18 @@ func RunUninstall(args []string) {
 		fmt.Println()
 	}
 
+	ExecuteUninstall(deleteFolder)
+	waitForEnter()
+}
+
+// ExecuteUninstall removes all components
+func ExecuteUninstall(deleteFolder bool) {
+	cfg, _ := config.Load()
+	rootFolder := config.DefaultRootFolder
+	if cfg != nil && cfg.RootFolder != "" {
+		rootFolder = cfg.RootFolder
+	}
+
 	fmt.Println(":: Removing components...")
 
 	// 1. Stop and remove service
@@ -245,7 +257,6 @@ func RunUninstall(args []string) {
 	fmt.Println("\033[1;32m:: Done. NetFiles has been completely uninstalled.\033[0m")
 	fmt.Println("   The background service, links, and rules have been removed.")
 	fmt.Println()
-	waitForEnter()
 }
 
 // RunStatus displays live service, folder, and link status
