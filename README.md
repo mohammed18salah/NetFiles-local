@@ -23,10 +23,10 @@
 ---
 
 <p align="center">
-  <img src="demo.gif" alt="NetFiles Live Demonstration" width="100%">
+  <img src="demo.gif" alt="NetFiles Live Demonstration" width="640">
 </p>
 <p align="center">
-  <sub>Video showcase: <a href="IMG_1198.MP4">IMG_1198.MP4</a></sub>
+  <sub>Full showcase video: <a href="IMG_1198.MP4">IMG_1198.MP4</a></sub>
 </p>
 
 ---
