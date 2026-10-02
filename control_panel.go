@@ -15,11 +15,51 @@ import (
 	"netfiles/core/folders"
 	"netfiles/core/identity"
 	"netfiles/core/service"
+	"netfiles/core/sharing"
 )
 
 // clearScreen resets the terminal viewport
 func clearScreen() {
 	fmt.Print("\033[H\033[2J")
+}
+
+// pause waits for the user to press Enter using the shared reader
+func pause(reader *bufio.Reader) {
+	fmt.Print("Press Enter to continue...")
+	_, _ = reader.ReadString('\n')
+}
+
+// ensureElevated checks if process is admin, or asks to elevate
+func ensureElevated(reader *bufio.Reader, actionDesc string) bool {
+	if sharing.IsElevated() {
+		return true
+	}
+
+	fmt.Println()
+	fmt.Printf(":: Administrator privileges are required to %s.\n", actionDesc)
+	fmt.Print(":: Request UAC elevation now? [Y/n] ")
+	ans, err := reader.ReadString('\n')
+	if err != nil {
+		return false
+	}
+	ans = strings.TrimSpace(ans)
+	if ans != "" && !strings.EqualFold(ans, "y") && !strings.EqualFold(ans, "yes") {
+		fmt.Println(":: Action cancelled.")
+		pause(reader)
+		return false
+	}
+
+	fmt.Println(":: Requesting UAC elevation...")
+	time.Sleep(300 * time.Millisecond)
+	err = sharing.Elevate(nil)
+	if err != nil {
+		fmt.Printf(":: [FAIL] Elevation failed: %v\n", err)
+		fmt.Println(":: Please right-click netfiles.exe and choose 'Run as administrator'.")
+		pause(reader)
+		return false
+	}
+	os.Exit(0)
+	return false
 }
 
 // detectInstalled checks whether NetFiles is already installed or configured
@@ -54,10 +94,6 @@ func detectInstalled() (installed bool, rootFolder string, displayName string, s
 
 // RunControlPanel is the interactive loop when netfiles.exe is run with no CLI arguments
 func RunControlPanel() {
-	if !checkElevatedOrPrompt(nil) {
-		return
-	}
-
 	reader := bufio.NewReader(os.Stdin)
 
 	for {
@@ -89,10 +125,16 @@ func showInstalledMenu(reader *bufio.Reader, rootFolder, displayName, svcStatus 
 		svcColor = "\033[1;31m"
 	}
 
+	modeStr := "\033[1;32m[ Administrator ]\033[0m"
+	if !sharing.IsElevated() {
+		modeStr = "\033[1;33m[ Standard User ]\033[0m"
+	}
+
 	fmt.Println(":: Existing NetFiles installation detected on this computer:")
 	fmt.Printf("   Computer Name : \033[1;36m%s\033[0m\n", displayName)
 	fmt.Printf("   Root Folder   : \033[1;33m%s\033[0m %s\n", rootFolder, folderStatus)
 	fmt.Printf("   Service       : %s[ %s ]\033[0m (NetFilesSvc)\n", svcColor, svcStatus)
+	fmt.Printf("   Access Mode   : %s\n", modeStr)
 	fmt.Println()
 	fmt.Println("+----------------------------------------------------------------------+")
 	fmt.Println("|                       NETFILES CONTROL PANEL                         |")
@@ -108,7 +150,10 @@ func showInstalledMenu(reader *bufio.Reader, rootFolder, displayName, svcStatus 
 	fmt.Println("+----------------------------------------------------------------------+")
 	fmt.Print("Select option [1-8]: ")
 
-	choice, _ := reader.ReadString('\n')
+	choice, err := reader.ReadString('\n')
+	if err != nil {
+		return false
+	}
 	choice = strings.TrimSpace(choice)
 
 	switch choice {
@@ -125,7 +170,7 @@ func showInstalledMenu(reader *bufio.Reader, rootFolder, displayName, svcStatus 
 		menuUninstall(reader)
 		return true
 	case "5":
-		menuRepairExplorerLinks()
+		menuRepairExplorerLinks(reader)
 		return true
 	case "6":
 		RunDoctor()
@@ -137,11 +182,11 @@ func showInstalledMenu(reader *bufio.Reader, rootFolder, displayName, svcStatus 
 		fmt.Println()
 		fmt.Println(":: Exiting NetFiles Control Panel.")
 		fmt.Println("   The NetFilesSvc background service remains active on your LAN.")
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(400 * time.Millisecond)
 		return false
 	default:
 		fmt.Println(":: Invalid choice. Please select 1-8.")
-		time.Sleep(1 * time.Second)
+		time.Sleep(800 * time.Millisecond)
 		return true
 	}
 }
@@ -161,7 +206,10 @@ func showNotInstalledMenu(reader *bufio.Reader) bool {
 	fmt.Println("+----------------------------------------------------------------------+")
 	fmt.Print("Select option [1-4]: ")
 
-	choice, _ := reader.ReadString('\n')
+	choice, err := reader.ReadString('\n')
+	if err != nil {
+		return false
+	}
 	choice = strings.TrimSpace(choice)
 
 	switch choice {
@@ -177,11 +225,11 @@ func showNotInstalledMenu(reader *bufio.Reader) bool {
 	case "4", "q", "exit":
 		fmt.Println()
 		fmt.Println(":: Exiting NetFiles.")
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(400 * time.Millisecond)
 		return false
 	default:
 		fmt.Println(":: Invalid choice. Please select 1-4.")
-		time.Sleep(1 * time.Second)
+		time.Sleep(800 * time.Millisecond)
 		return true
 	}
 }
@@ -205,7 +253,7 @@ func menuRenamePC(reader *bufio.Reader) {
 	input = strings.TrimSpace(input)
 	if input == "" {
 		fmt.Println(":: Rename cancelled. Computer name unchanged.")
-		waitForEnter()
+		pause(reader)
 		return
 	}
 
@@ -215,7 +263,7 @@ func menuRenamePC(reader *bufio.Reader) {
 	err = config.Save(cfg)
 	if err != nil {
 		fmt.Printf(":: [FAIL] Could not save config: %v\n", err)
-		waitForEnter()
+		pause(reader)
 		return
 	}
 
@@ -229,19 +277,27 @@ func menuRenamePC(reader *bufio.Reader) {
 
 	// If background service is running, restart it to broadcast the new name immediately
 	if service.IsRunning() {
-		fmt.Print(":: Restarting background service to broadcast new name... ")
-		_ = service.Stop()
-		time.Sleep(1 * time.Second)
-		_ = service.Start()
-		fmt.Println("[ OK ]")
+		if sharing.IsElevated() {
+			fmt.Print(":: Restarting background service to broadcast new name... ")
+			_ = service.Stop()
+			time.Sleep(1 * time.Second)
+			_ = service.Start()
+			fmt.Println("[ OK ]")
+		} else {
+			fmt.Println(":: Notice: Background service will broadcast the new name on its next restart.")
+		}
 	}
 
 	fmt.Println()
-	waitForEnter()
+	pause(reader)
 }
 
 // menuServiceControl toggles or restarts the background service
 func menuServiceControl(reader *bufio.Reader) {
+	if !ensureElevated(reader, "control the background service") {
+		return
+	}
+
 	fmt.Println()
 	fmt.Println("------------------------------------------------------------------------")
 	fmt.Println("                     BACKGROUND SERVICE CONTROL                         ")
@@ -256,7 +312,10 @@ func menuServiceControl(reader *bufio.Reader) {
 		fmt.Println("  [2] Restart service")
 		fmt.Println("  [3] Back to main menu")
 		fmt.Print("\nSelect option [1-3]: ")
-		choice, _ := reader.ReadString('\n')
+		choice, err := reader.ReadString('\n')
+		if err != nil {
+			return
+		}
 		choice = strings.TrimSpace(choice)
 
 		switch choice {
@@ -283,7 +342,10 @@ func menuServiceControl(reader *bufio.Reader) {
 		fmt.Println("  [1] Start service")
 		fmt.Println("  [2] Back to main menu")
 		fmt.Print("\nSelect option [1-2]: ")
-		choice, _ := reader.ReadString('\n')
+		choice, err := reader.ReadString('\n')
+		if err != nil {
+			return
+		}
 		choice = strings.TrimSpace(choice)
 
 		if choice == "1" {
@@ -299,7 +361,10 @@ func menuServiceControl(reader *bufio.Reader) {
 	} else {
 		fmt.Println(":: NetFilesSvc is not installed.")
 		fmt.Print("Install and start service now? [Y/n]: ")
-		ans, _ := reader.ReadString('\n')
+		ans, err := reader.ReadString('\n')
+		if err != nil {
+			return
+		}
 		ans = strings.TrimSpace(ans)
 		if ans == "" || strings.EqualFold(ans, "y") || strings.EqualFold(ans, "yes") {
 			exePath, _ := os.Executable()
@@ -313,7 +378,7 @@ func menuServiceControl(reader *bufio.Reader) {
 	}
 
 	fmt.Println()
-	waitForEnter()
+	pause(reader)
 }
 
 // menuDeleteFolder removes the NetFiles directory and its files
@@ -333,7 +398,10 @@ func menuDeleteFolder(reader *bufio.Reader) {
 	if fi, err := os.Stat(rootFolder); err != nil || !fi.IsDir() {
 		fmt.Println(":: Notice: Folder does not exist on disk.")
 		fmt.Print("Do you want to create a clean empty NetFiles folder? [y/N]: ")
-		ans, _ := reader.ReadString('\n')
+		ans, err := reader.ReadString('\n')
+		if err != nil {
+			return
+		}
 		ans = strings.TrimSpace(ans)
 		if strings.EqualFold(ans, "y") || strings.EqualFold(ans, "yes") {
 			name := "PC-001"
@@ -344,7 +412,7 @@ func menuDeleteFolder(reader *bufio.Reader) {
 			explorer.NotifyExplorer()
 			fmt.Println(":: [ OK ] Clean folder created.")
 		}
-		waitForEnter()
+		pause(reader)
 		return
 	}
 
@@ -356,11 +424,14 @@ func menuDeleteFolder(reader *bufio.Reader) {
 	fmt.Println()
 	fmt.Print("Type 'DELETE' or 'y' to confirm permanent deletion (or Enter to cancel): ")
 
-	confirm, _ := reader.ReadString('\n')
+	confirm, err := reader.ReadString('\n')
+	if err != nil {
+		return
+	}
 	confirm = strings.TrimSpace(confirm)
 	if !strings.EqualFold(confirm, "delete") && !strings.EqualFold(confirm, "yes") && !strings.EqualFold(confirm, "y") {
 		fmt.Println(":: Deletion cancelled. Folder was kept untouched.")
-		waitForEnter()
+		pause(reader)
 		return
 	}
 
@@ -374,7 +445,7 @@ func menuDeleteFolder(reader *bufio.Reader) {
 	}
 
 	fmt.Print(":: Deleting folder and all files... ")
-	err := os.RemoveAll(rootFolder)
+	err = os.RemoveAll(rootFolder)
 	if err != nil {
 		fmt.Printf("[FAIL: %v]\n", err)
 	} else {
@@ -385,7 +456,10 @@ func menuDeleteFolder(reader *bufio.Reader) {
 
 	fmt.Println()
 	fmt.Print("Do you want to re-create a clean empty NetFiles folder now? [y/N]: ")
-	recreate, _ := reader.ReadString('\n')
+	recreate, err := reader.ReadString('\n')
+	if err != nil {
+		return
+	}
 	recreate = strings.TrimSpace(recreate)
 	if strings.EqualFold(recreate, "y") || strings.EqualFold(recreate, "yes") {
 		name := "PC-001"
@@ -403,11 +477,15 @@ func menuDeleteFolder(reader *bufio.Reader) {
 	}
 
 	fmt.Println()
-	waitForEnter()
+	pause(reader)
 }
 
 // menuUninstall removes the service, firewall rules, and Explorer shortcuts
 func menuUninstall(reader *bufio.Reader) {
+	if !ensureElevated(reader, "uninstall NetFiles components") {
+		return
+	}
+
 	cfg, _ := config.Load()
 	rootFolder := config.DefaultRootFolder
 	if cfg != nil && cfg.RootFolder != "" {
@@ -426,27 +504,37 @@ func menuUninstall(reader *bufio.Reader) {
 	fmt.Println()
 	fmt.Printf("Do you also want to delete the folder '%s' and all files? [y/N]: ", rootFolder)
 
-	deleteFolderAns, _ := reader.ReadString('\n')
+	deleteFolderAns, err := reader.ReadString('\n')
+	if err != nil {
+		return
+	}
 	deleteFolderAns = strings.TrimSpace(deleteFolderAns)
 	deleteFolder := strings.EqualFold(deleteFolderAns, "y") || strings.EqualFold(deleteFolderAns, "yes")
 
 	fmt.Print("Are you sure you want to proceed with uninstallation? [y/N]: ")
-	confirmAns, _ := reader.ReadString('\n')
+	confirmAns, err := reader.ReadString('\n')
+	if err != nil {
+		return
+	}
 	confirmAns = strings.TrimSpace(confirmAns)
 	if !strings.EqualFold(confirmAns, "y") && !strings.EqualFold(confirmAns, "yes") {
 		fmt.Println(":: Uninstallation cancelled.")
-		waitForEnter()
+		pause(reader)
 		return
 	}
 
 	fmt.Println()
 	ExecuteUninstall(deleteFolder)
 	fmt.Println()
-	waitForEnter()
+	pause(reader)
 }
 
 // menuRepairExplorerLinks re-registers the CLSID and desktop shortcuts
-func menuRepairExplorerLinks() {
+func menuRepairExplorerLinks(reader *bufio.Reader) {
+	if !ensureElevated(reader, "repair Explorer registry links") {
+		return
+	}
+
 	cfg, _ := config.Load()
 	rootFolder := config.DefaultRootFolder
 	if cfg != nil && cfg.RootFolder != "" {
@@ -473,11 +561,15 @@ func menuRepairExplorerLinks() {
 	fmt.Println()
 	fmt.Println(":: [ OK ] File Explorer links and Desktop shortcuts repaired.")
 	fmt.Println()
-	waitForEnter()
+	pause(reader)
 }
 
 // menuCustomSetup configures custom parameters before running setup
 func menuCustomSetup(reader *bufio.Reader) {
+	if !ensureElevated(reader, "configure and install NetFiles") {
+		return
+	}
+
 	fmt.Println()
 	fmt.Println("------------------------------------------------------------------------")
 	fmt.Println("                           CUSTOM SETUP                                 ")
@@ -491,7 +583,10 @@ func menuCustomSetup(reader *bufio.Reader) {
 	// Computer name
 	fmt.Printf("Current or suggested name: %s\n", identity.FallbackName())
 	fmt.Print("Enter computer name on LAN (or Enter to keep default): ")
-	nameInput, _ := reader.ReadString('\n')
+	nameInput, err := reader.ReadString('\n')
+	if err != nil {
+		return
+	}
 	nameInput = strings.TrimSpace(nameInput)
 	if nameInput != "" {
 		cfg.DisplayName = identity.ParseNameInput(nameInput, cfg.NamePrefix)
@@ -500,7 +595,10 @@ func menuCustomSetup(reader *bufio.Reader) {
 	// Root folder
 	fmt.Printf("Default folder: %s\n", config.DefaultRootFolder)
 	fmt.Print("Enter custom root folder (or Enter to keep default): ")
-	folderInput, _ := reader.ReadString('\n')
+	folderInput, err := reader.ReadString('\n')
+	if err != nil {
+		return
+	}
 	folderInput = strings.TrimSpace(folderInput)
 	if folderInput != "" {
 		abs, err := filepath.Abs(folderInput)
