@@ -147,7 +147,7 @@ func RunSetup(args []string) {
 		fmt.Printf("\n:: [WARN] Explorer integration warning: %v\n", err)
 	}
 
-	fmt.Println(" Total (4/4)                                       [\033[1;35m#🦇###################\033[0m] 100%")
+	fmt.Println(" Total (4/4)                                       [\033[1;35m######################\033[0m] 100%")
 	fmt.Println()
 
 	// 6. Running post-transaction hooks
@@ -280,11 +280,11 @@ func RunStatus() {
 
 	// Status color
 	if svcStatus == "Running" {
-		fmt.Printf("   Service Status   : \033[1;32m● %s (NetFilesSvc)\033[0m\n", svcStatus)
+		fmt.Printf("   Service Status   : \033[1;32m[+] %s (NetFilesSvc)\033[0m\n", svcStatus)
 	} else if svcStatus == "Stopped" {
-		fmt.Printf("   Service Status   : \033[1;31m● %s\033[0m (Run 'netfiles start' to start)\n", svcStatus)
+		fmt.Printf("   Service Status   : \033[1;31m[-] %s\033[0m (Run 'netfiles start' to start)\n", svcStatus)
 	} else {
-		fmt.Printf("   Service Status   : \033[90m○ %s\033[0m (Run 'netfiles setup' to install)\n", svcStatus)
+		fmt.Printf("   Service Status   : \033[90m[-] %s\033[0m (Run 'netfiles setup' to install)\n", svcStatus)
 	}
 
 	// Folder status

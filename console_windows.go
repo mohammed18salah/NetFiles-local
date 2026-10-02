@@ -9,11 +9,7 @@ import (
 )
 
 func initConsole() {
-	// Enable UTF-8 code page for full unicode support
-	_ = windows.SetConsoleOutputCP(65001)
-	_ = windows.SetConsoleCP(65001)
-
-	// Enable Virtual Terminal Processing for ANSI colors and escape sequences
+	// Enable Virtual Terminal Processing for ANSI colors without altering console font or codepage
 	handle := windows.Handle(os.Stdout.Fd())
 	var mode uint32
 	if err := windows.GetConsoleMode(handle, &mode); err == nil {
